@@ -1,6 +1,13 @@
 const std = @import("std");
 const rl = @import("raylib");
 
+const State = enum {
+    running,
+    endscreen,
+    gameover,
+    won,
+};
+
 const Rectangle = struct {
     x: i32,
     y: i32,
@@ -33,15 +40,8 @@ const GameConfig = struct {
     player: struct {
         width: i32 = 50,
         height: i32 = 30,
-        bullet: struct {
-            width: i32 = 4,
-            height: i32 = 10,
-            max: i32 = 10,
-        } = .{},
     } = .{},
     invader: struct {
-        rows: i32 = 5,
-        cols: i32 = 11,
         width: i32 = 40,
         height: i32 = 30,
         startX: i32 = 100,
@@ -53,19 +53,17 @@ const GameConfig = struct {
         dropDistance: i32 = 10,
         shootDelay: i32 = 60,
         shootChance: i32 = 5,
-        bullet: struct {
-            width: i32 = 4,
-            height: i32 = 10,
-            max: i32 = 10,
-        } = .{},
     } = .{},
     shield: struct {
-        count: i32 = 4,
         startX: i32 = 150,
         y: i32 = 450,
         width: i32 = 80,
         height: i32 = 60,
         spacing: i32 = 150,
+    } = .{},
+    bullet: struct {
+        width: i32 = 4,
+        height: i32 = 10,
     } = .{},
 };
 
@@ -83,37 +81,39 @@ const Player = struct {
         } };
     }
 
-    pub fn update(self: *@This()) void {
-        if (rl.isKeyDown(rl.KeyboardKey.d)) {
-            self.rect.x += self.speed;
-        }
-        if (rl.isKeyDown(rl.KeyboardKey.a)) {
-            self.rect.x -= self.speed;
-        }
-        self.rect.x = std.math.clamp(self.rect.x, 0, rl.getScreenWidth() - self.rect.width);
+    pub fn update(self: *@This(), screen_width: i32) void {
+        self.rect.x = std.math.clamp(self.rect.x, 0, screen_width - self.rect.width);
     }
 };
 
 const Bullet = struct {
     rect: Rectangle,
-    speed: i32 = 10,
     active: bool = false,
+    speed: i32,
+    is_player: bool,
 
-    pub fn init(x: i32, y: i32, width: i32, height: i32) @This() {
-        return .{ .rect = .{
-            .x = x,
-            .y = y,
-            .width = width,
-            .height = height,
-            .color = rl.Color.red,
-        } };
+    pub fn init(x: i32, y: i32, width: i32, height: i32, speed: i32, is_player: bool) @This() {
+        return .{
+            .rect = .{
+                .x = x,
+                .y = y,
+                .width = width,
+                .height = height,
+                .color = rl.Color.red,
+            },
+            .speed = speed,
+            .is_player = is_player,
+        };
     }
 
-    pub fn update(self: *@This()) void {
+    pub fn update(self: *@This(), screen_height: i32) void {
         if (!self.active) return;
-        self.rect.y -= self.speed;
-        if (self.rect.y < 0) {
-            self.active = false;
+        if (self.is_player) {
+            self.rect.y -= self.speed;
+            if (self.rect.y < 0) self.active = false;
+        } else {
+            self.rect.y += self.speed;
+            if (self.rect.y > screen_height) self.active = false;
         }
     }
 
@@ -147,32 +147,6 @@ const Invader = struct {
     }
 };
 
-const EnemyBullet = struct {
-    rect: Rectangle,
-    speed: i32 = 5,
-    active: bool = false,
-
-    pub fn init(x: i32, y: i32, width: i32, height: i32) @This() {
-        return .{ .rect = .{
-            .x = x,
-            .y = y,
-            .width = width,
-            .height = height,
-            .color = rl.Color.yellow,
-        } };
-    }
-
-    pub fn update(self: *@This(), screen_height: i32) void {
-        if (!self.active) return;
-        self.rect.y += self.speed;
-        if (self.rect.y > screen_height) self.active = false;
-    }
-
-    pub fn draw(self: @This()) void {
-        if (self.active) self.rect.draw();
-    }
-};
-
 const Shield = struct {
     rect: Rectangle,
     health: i32 = 10,
@@ -183,7 +157,7 @@ const Shield = struct {
             .y = y,
             .width = width,
             .height = height,
-            .color = undefined,
+            .color = rl.Color.purple,
         } };
     }
 
@@ -193,144 +167,97 @@ const Shield = struct {
     }
 };
 
-pub fn centerScreenText(text: [:0]const u8, screenwidth: i32, size: i32, y: i32, color: rl.Color) void {
-    rl.drawText(text, @divFloor(screenwidth, 2) - @divFloor(rl.measureText(text, size), 2), y, size, color);
-}
+const Game = struct {
+    conf: GameConfig,
+    state: State = State.running,
+    invader_direction: i32 = 1,
+    move_timer: i32 = 0,
+    score: i32 = 0,
+    enemy_shoot_timer: i32 = 0,
+    shields: [4]Shield = undefined,
+    bullets: [10]Bullet = undefined,
+    enemy_bullets: [10]Bullet = undefined,
+    invaders: [5][11]Invader = undefined,
+    rng: std.Random.DefaultPrng,
+    player: Player,
 
-pub fn resetGame(
-    player: *Player,
-    bullets: []Bullet,
-    enemy_bullets: []EnemyBullet,
-    shields: []Shield,
-    invaders: anytype,
-    invader_direction: *i32,
-    score: *i32,
-    game: GameConfig,
-) void {
-    score.* = 0;
-    player.* = Player.init(
-        @divFloor(game.screen.width, 2) - @divFloor(game.player.width, 2),
-        game.screen.height - 60,
-        game.player.width,
-        game.player.height,
-    );
-    for (bullets) |*bullet| {
-        bullet.active = false;
-    }
-    for (enemy_bullets) |*bullet| {
-        bullet.active = false;
-    }
-    for (shields) |*shield| {
-        shield.health = 10;
-    }
-    for (invaders, 0..) |*row, i| {
-        for (row, 0..) |*invader, j| {
-            const x = game.invader.startX + @as(i32, @intCast(j)) * game.invader.spacingX;
-            const y = game.invader.startY + @as(i32, @intCast(i)) * game.invader.spacingY;
-            invader.* = Invader.init(x, y, game.invader.width, game.invader.height);
-        }
-    }
-    invader_direction.* = 1;
-}
-
-pub fn main() void {
-    const game = GameConfig{};
-    var game_over: bool = false; // turn into a state machine with enums
-    var game_won: bool = false; // turn into a state machine with enums
-    var invader_direction: i32 = 1;
-    var move_timer: i32 = 0;
-    var score: i32 = 0;
-    var enemy_shoot_timer: i32 = 0;
-    rl.setTraceLogLevel(rl.TraceLogLevel.all);
-    rl.initWindow(game.screen.width, game.screen.height, game.title);
-    defer rl.closeWindow();
-
-    var player = Player.init(
-        @divFloor(game.screen.width, 2) - @divFloor(game.player.width, 2),
-        game.screen.height - 60,
-        game.player.width,
-        game.player.height,
-    );
-
-    var shields: [game.shield.count]Shield = undefined;
-    for (&shields, 0..) |*shield, i| {
-        shield.* = Shield.init(game.shield.startX + @as(i32, @intCast(i)) * game.shield.spacing, game.shield.y, game.shield.width, game.shield.height);
-    }
-
-    var bullets: [game.player.bullet.max]Bullet = undefined;
-    for (&bullets) |*bullet| {
-        bullet.* = Bullet.init(0, 0, game.player.bullet.width, game.player.bullet.height);
-    }
-
-    var enemy_bullets: [game.invader.bullet.max]EnemyBullet = undefined;
-    for (&enemy_bullets) |*ebullet| {
-        ebullet.* = EnemyBullet.init(0, 0, game.invader.bullet.width, game.invader.bullet.height);
-    }
-
-    var invaders: [game.invader.rows][game.invader.cols]Invader = undefined;
-    for (&invaders, 0..) |*row, i| {
-        for (row, 0..) |*invader, j| {
-            const x = game.invader.startX + @as(i32, @intCast(j)) * game.invader.spacingX;
-            const y = game.invader.startY + @as(i32, @intCast(i)) * game.invader.spacingY;
-            invader.* = Invader.init(x, y, game.invader.width, game.invader.height);
-        }
-    }
-
-    rl.setTargetFPS(60);
-
-    while (!rl.windowShouldClose()) {
-        rl.beginDrawing();
-        defer rl.endDrawing();
-
-        rl.clearBackground(rl.Color.purple);
-
-        if (game_over) {
-            centerScreenText("GAMEOVER", game.screen.width, 40, 250, rl.Color.red);
-            centerScreenText(rl.textFormat("Final Score %d", .{score}), game.screen.width, 30, 310, rl.Color.white);
-            centerScreenText("Press ENTER to play again or ESC to quit", game.screen.width, 25, 370, rl.Color.white);
-            if (rl.isKeyPressed(rl.KeyboardKey.enter)) {
-                game_over = false;
-                resetGame(&player, &bullets, &enemy_bullets, &shields, &invaders, &invader_direction, &score, game);
-            }
-            continue;
-        }
-
-        if (game_won) {
-            centerScreenText("YOU WIN", game.screen.width, 40, 250, rl.Color.gold);
-            centerScreenText(rl.textFormat("Final Score %d", .{score}), game.screen.width, 30, 310, rl.Color.white);
-            centerScreenText("Press ENTER to play again or ESC to quit", game.screen.width, 25, 370, rl.Color.white);
-            if (rl.isKeyPressed(rl.KeyboardKey.enter)) {
-                game_won = false;
-                resetGame(&player, &bullets, &enemy_bullets, &shields, &invaders, &invader_direction, &score, game);
-            }
-            continue;
-        }
-
-        player.update();
-        if (rl.isKeyPressed(rl.KeyboardKey.space)) {
-            for (&bullets) |*bullet| {
-                if (bullet.active) continue;
-                bullet.rect.x = player.rect.x + @divFloor(player.rect.width, 2) - @divFloor(bullet.rect.width, 2);
-                bullet.rect.y = player.rect.y;
-                bullet.active = true;
-                break;
-            }
-        }
-        for (&bullets) |*bullet| {
-            bullet.update();
-            if (!bullet.active) continue;
-            for (&invaders) |*row| {
-                for (row) |*invader| {
-                    if (!invader.alive) continue;
-                    if (bullet.rect.intersects(invader.rect)) {
-                        bullet.active = false;
-                        invader.alive = false;
-                        score += 10;
+    pub fn handleInput(self: *@This()) void {
+        switch (self.state) {
+            .gameover, State.won => {
+                if (rl.isKeyPressed(rl.KeyboardKey.enter)) resetGame(self);
+            },
+            .running => {
+                if (rl.isKeyDown(rl.KeyboardKey.d)) self.player.rect.x += self.player.speed;
+                if (rl.isKeyDown(rl.KeyboardKey.a)) self.player.rect.x -= self.player.speed;
+                if (rl.isKeyPressed(rl.KeyboardKey.space)) {
+                    for (&self.bullets) |*bullet| {
+                        if (bullet.active) continue;
+                        bullet.rect.x = self.player.rect.x + @divFloor(self.player.rect.width, 2) - @divFloor(bullet.rect.width, 2);
+                        bullet.rect.y = self.player.rect.y;
+                        bullet.active = true;
                         break;
                     }
                 }
+            },
+            else => {},
+        }
+    }
+
+    pub fn update(self: *@This()) void {
+        self.player.update(self.conf.screen.width);
+
+        for (&self.bullets) |*bullet| {
+            bullet.update(self.conf.screen.height);
+            if (!bullet.active) continue;
+            bullet_hit: {
+                for (&self.invaders) |*row| {
+                    for (row) |*invader| {
+                        if (!invader.alive) continue;
+                        if (bullet.rect.intersects(invader.rect)) {
+                            bullet.active = false;
+                            invader.alive = false;
+                            self.score += 10;
+                            break :bullet_hit;
+                        }
+                    }
+                }
+                for (&self.shields) |*shield| {
+                    if (shield.health == 0) continue;
+                    if (!bullet.rect.intersects(shield.rect)) continue;
+                    bullet.active = false;
+                    shield.health -= 1;
+                    break :bullet_hit;
+                }
             }
-            for (&shields) |*shield| {
+        }
+
+        self.enemy_shoot_timer += 1;
+        if (self.enemy_shoot_timer >= self.conf.invader.shootDelay) {
+            self.enemy_shoot_timer = 0;
+            invader_fired: {
+                for (&self.invaders) |*row| {
+                    for (row) |*invader| {
+                        if (!invader.alive or self.rng.random().intRangeAtMost(i32, 0, 100) > self.conf.invader.shootChance) continue;
+                        for (&self.enemy_bullets) |*bullet| {
+                            if (bullet.active) continue;
+                            bullet.rect.x = invader.rect.x + @divFloor(invader.rect.width, 2) - @divFloor(bullet.rect.width, 2);
+                            bullet.rect.y = invader.rect.y + invader.rect.height;
+                            bullet.active = true;
+                            break :invader_fired;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (&self.enemy_bullets) |*bullet| {
+            bullet.update(self.conf.screen.height);
+            if (!bullet.active) continue;
+            if (bullet.rect.intersects(self.player.rect)) {
+                bullet.active = false;
+                self.state = State.gameover;
+            }
+            for (&self.shields) |*shield| {
                 if (shield.health == 0) continue;
                 if (!bullet.rect.intersects(shield.rect)) continue;
                 bullet.active = false;
@@ -339,101 +266,124 @@ pub fn main() void {
             }
         }
 
-        for (&enemy_bullets) |*ebullet| {
-            ebullet.update(game.screen.height);
-            if (!ebullet.active) continue;
-            if (ebullet.rect.intersects(player.rect)) {
-                ebullet.active = false;
-                game_over = true;
-            }
-            for (&shields) |*shield| {
-                if (shield.health == 0) continue;
-                if (!ebullet.rect.intersects(shield.rect)) continue;
-                ebullet.active = false;
-                shield.health -= 1;
-                break;
-            }
-        }
-
-        enemy_shoot_timer += 1;
-        if (enemy_shoot_timer >= game.invader.shootDelay) {
-            enemy_shoot_timer = 0;
-            for (&invaders) |*row| {
-                for (row) |*invader| {
-                    if (invader.alive and rl.getRandomValue(0, 100) < game.invader.shootChance) {
-                        for (&enemy_bullets) |*ebullet| {
-                            if (ebullet.active) continue;
-                            ebullet.rect.x = invader.rect.x + @divFloor(invader.rect.width, 2) - @divFloor(game.invader.bullet.width, 2);
-                            ebullet.rect.y = invader.rect.y + invader.rect.height;
-                            ebullet.active = true;
-                            break;
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
-        move_timer += 1;
-        if (move_timer >= game.invader.moveDelay) {
-            move_timer = 0;
+        self.move_timer += 1;
+        if (self.move_timer >= self.conf.invader.moveDelay) {
+            var all_invaders_dead = true;
+            self.move_timer = 0;
 
             var hit_edge = false;
-            outer_loop: for (&invaders) |*row| {
+            invader_move: for (&self.invaders) |*row| {
                 for (row) |*invader| {
                     if (!invader.alive) continue;
-                    if (invader.rect.intersects(player.rect)) {
-                        game_over = true;
-                        break :outer_loop;
+                    all_invaders_dead = false;
+                    if (invader.rect.intersects(self.player.rect)) {
+                        self.state = State.gameover;
+                        break :invader_move;
                     }
-                    const next_x = invader.rect.x + (game.invader.speed * invader_direction);
-                    if (next_x <= 0 or next_x + invader.rect.width >= game.screen.width) {
+                    const next_x = invader.rect.x + (self.conf.invader.speed * self.invader_direction);
+                    if (next_x <= 0 or next_x + invader.rect.width >= self.conf.screen.width) {
                         hit_edge = true;
-                        break :outer_loop;
+                        break :invader_move;
                     }
                 }
             }
-
-            var dropDistance: i32 = 0;
+            var drop_distance: i32 = 0;
             if (hit_edge) {
-                invader_direction *= -1;
-                dropDistance = game.invader.dropDistance;
+                self.invader_direction *= -1;
+                drop_distance = self.conf.invader.dropDistance;
             }
-            for (&invaders) |*row| {
+            for (&self.invaders) |*row| {
                 for (row) |*invader| {
-                    if (dropDistance > 0) invader.update(0, dropDistance) else invader.update(game.invader.speed * invader_direction, 0);
+                    if (drop_distance > 0) invader.update(0, drop_distance) else invader.update(self.conf.invader.speed * self.invader_direction, 0);
                 }
             }
+            if (all_invaders_dead) self.state = State.won;
         }
+    }
 
-        var all_invaders_dead = true;
-        outer_loop: for (&invaders) |*row| {
-            for (row) |*invader| {
-                if (!invader.alive) continue;
-                all_invaders_dead = false;
-                break :outer_loop;
-            }
+    pub fn draw(self: @This()) void {
+        rl.clearBackground(rl.Color.purple);
+        sw: switch (self.state) {
+            .gameover => {
+                centerScreenText("GAMEOVER", self.conf.screen.width, 40, 250, rl.Color.red);
+                continue :sw State.endscreen;
+            },
+            .won => {
+                centerScreenText("YOU WIN", self.conf.screen.width, 40, 250, rl.Color.gold);
+                continue :sw State.endscreen;
+            },
+            .endscreen => {
+                centerScreenText(rl.textFormat("Final Score %d", .{self.score}), self.conf.screen.width, 30, 310, rl.Color.white);
+                centerScreenText("Press ENTER to play again or ESC to quit", self.conf.screen.width, 25, 370, rl.Color.white);
+            },
+            .running => {
+                for (&self.shields) |*shield| shield.draw();
+                self.player.rect.draw();
+                for (&self.invaders) |*row| {
+                    for (row) |*invader| {
+                        invader.draw();
+                    }
+                }
+                for (&self.bullets) |*bullet| bullet.draw();
+                for (&self.enemy_bullets) |*bullet| bullet.draw();
+                rl.drawText(rl.textFormat("Score %d", .{self.score}), 20, 20, 20, rl.Color.green);
+            },
         }
-        if (all_invaders_dead) {
-            game_won = true;
-        }
+    }
+};
 
-        for (&shields) |*shield| {
-            shield.draw();
+pub fn createGame() Game {
+    const conf = GameConfig{};
+    var game = Game{
+        .conf = conf,
+        .player = Player.init(
+            @divFloor(conf.screen.width, 2) - @divFloor(conf.player.width, 2),
+            conf.screen.height - 60,
+            conf.player.width,
+            conf.player.height,
+        ),
+        .rng = std.Random.DefaultPrng.init(@as(u64, std.crypto.random.int(u64))),
+    };
+    for (&game.shields, 0..) |*shield, i| {
+        shield.* = Shield.init(conf.shield.startX + @as(i32, @intCast(i)) * conf.shield.spacing, conf.shield.y, conf.shield.width, conf.shield.height);
+    }
+    for (&game.bullets) |*bullet| {
+        bullet.* = Bullet.init(0, 0, conf.bullet.width, conf.bullet.height, 10, true);
+    }
+    for (&game.enemy_bullets) |*bullet| {
+        bullet.* = Bullet.init(0, 0, conf.bullet.width, conf.bullet.height, 5, false);
+    }
+    for (&game.invaders, 0..) |*row, i| {
+        for (row, 0..) |*invader, j| {
+            const x = conf.invader.startX + @as(i32, @intCast(j)) * conf.invader.spacingX;
+            const y = conf.invader.startY + @as(i32, @intCast(i)) * conf.invader.spacingY;
+            invader.* = Invader.init(x, y, conf.invader.width, conf.invader.height);
         }
-        player.rect.draw();
-        for (&invaders) |*row| {
-            for (row) |*invader| {
-                invader.draw();
-            }
-        }
-        for (&bullets) |*bullet| {
-            bullet.draw();
-        }
-        for (&enemy_bullets) |*ebullet| {
-            ebullet.draw();
-        }
+    }
+    return game;
+}
 
-        rl.drawText(rl.textFormat("Score %d", .{score}), 20, 20, 20, rl.Color.green);
+pub fn resetGame(game: *Game) void {
+    game.* = createGame();
+}
+
+pub fn centerScreenText(text: [:0]const u8, screenWidth: i32, size: i32, y: i32, color: rl.Color) void {
+    rl.drawText(text, @divFloor(screenWidth, 2) - @divFloor(rl.measureText(text, size), 2), y, size, color);
+}
+
+pub fn main() void {
+    const conf = GameConfig{};
+    rl.initWindow(conf.screen.width, conf.screen.height, conf.title);
+    defer rl.closeWindow();
+    rl.setTargetFPS(60);
+
+    var game = createGame();
+
+    while (!rl.windowShouldClose()) {
+        rl.beginDrawing();
+        defer rl.endDrawing();
+        game.handleInput();
+        game.update();
+        game.draw();
     }
 }
