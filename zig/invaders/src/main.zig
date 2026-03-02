@@ -13,7 +13,6 @@ const Rectangle = struct {
     y: i32,
     width: i32,
     height: i32,
-    color: rl.Color,
 
     pub fn intersects(self: @This(), other: @This()) bool {
         return self.x < other.x + other.width and
@@ -22,11 +21,7 @@ const Rectangle = struct {
             self.y + self.height > other.y;
     }
 
-    pub fn draw(self: @This()) void {
-        self.drawWithColor(self.color);
-    }
-
-    pub fn drawWithColor(self: @This(), color: rl.Color) void {
+    pub fn draw(self: @This(), color: rl.Color) void {
         rl.drawRectangle(self.x, self.y, self.width, self.height, color);
     }
 };
@@ -48,7 +43,6 @@ const GameConfig = struct {
         startY: i32 = 50,
         spacingX: i32 = 60,
         spacingY: i32 = 40,
-        speed: i32 = 5,
         moveDelay: i32 = 30,
         dropDistance: i32 = 10,
         shootDelay: i32 = 60,
@@ -77,7 +71,6 @@ const Player = struct {
             .y = y,
             .width = width,
             .height = height,
-            .color = rl.Color.blue,
         } };
     }
 
@@ -94,31 +87,32 @@ const Bullet = struct {
 
     pub fn init(x: i32, y: i32, width: i32, height: i32, speed: i32, is_player: bool) @This() {
         return .{
-            .rect = .{
-                .x = x,
-                .y = y,
-                .width = width,
-                .height = height,
-                .color = rl.Color.red,
-            },
+            .rect = .{ .x = x, .y = y, .width = width, .height = height },
             .speed = speed,
             .is_player = is_player,
         };
     }
 
-    pub fn update(self: *@This(), screen_height: i32) void {
+    pub fn update(self: *@This(), game: *Game) void {
         if (!self.active) return;
         if (self.is_player) {
             self.rect.y -= self.speed;
-            if (self.rect.y < 0) self.active = false;
+            if (self.rect.y < 0) {
+                self.active = false;
+                game.active_bullets -= 1;
+            }
         } else {
             self.rect.y += self.speed;
-            if (self.rect.y > screen_height) self.active = false;
+            if (self.rect.y > game.conf.screen.height) {
+                self.active = false;
+                game.active_ebullets -= 1;
+            }
         }
     }
 
     pub fn draw(self: @This()) void {
-        if (self.active) self.rect.draw();
+        if (!self.active) return;
+        if (self.is_player) self.rect.draw(rl.Color.red) else self.rect.draw(rl.Color.yellow);
     }
 };
 
@@ -128,17 +122,11 @@ const Invader = struct {
     alive: bool = true,
 
     pub fn init(x: i32, y: i32, width: i32, height: i32) @This() {
-        return .{ .rect = .{
-            .x = x,
-            .y = y,
-            .width = width,
-            .height = height,
-            .color = rl.Color.green,
-        } };
+        return .{ .rect = .{ .x = x, .y = y, .width = width, .height = height } };
     }
 
     pub fn draw(self: @This()) void {
-        if (self.alive) self.rect.draw();
+        if (self.alive) self.rect.draw(rl.Color.green);
     }
 
     pub fn update(self: *@This(), dx: i32, dy: i32) void {
@@ -148,8 +136,8 @@ const Invader = struct {
 };
 
 const Shield = struct {
+    health: u8 = 10,
     rect: Rectangle,
-    health: i32 = 10,
 
     pub fn init(x: i32, y: i32, width: i32, height: i32) @This() {
         return .{ .rect = .{
@@ -157,23 +145,26 @@ const Shield = struct {
             .y = y,
             .width = width,
             .height = height,
-            .color = rl.Color.purple,
         } };
     }
 
     pub fn draw(self: @This()) void {
         if (self.health == 0) return;
-        self.rect.drawWithColor(rl.Color{ .r = 0, .g = 255, .b = 255, .a = @as(u8, @intCast(@min(255, self.health * 25))) });
+        self.rect.draw(rl.Color{ .r = 0, .g = 255, .b = 255, .a = @as(u8, @intCast(@min(255, self.health * 25))) });
     }
 };
 
 const Game = struct {
-    conf: GameConfig,
+    invader_move_right: bool = true,
+    active_shields: u8 = 0,
+    move_timer: u8 = 0,
+    alive_invaders: u8 = 0,
+    active_bullets: u8 = 0,
+    active_ebullets: u8 = 0,
+    enemy_shoot_timer: u8 = 0,
     state: State = State.running,
-    invader_direction: i32 = 1,
-    move_timer: i32 = 0,
-    score: i32 = 0,
-    enemy_shoot_timer: i32 = 0,
+    score: u16 = 0,
+    conf: GameConfig,
     shields: [4]Shield = undefined,
     bullets: [10]Bullet = undefined,
     enemy_bullets: [10]Bullet = undefined,
@@ -195,6 +186,7 @@ const Game = struct {
                         bullet.rect.x = self.player.rect.x + @divFloor(self.player.rect.width, 2) - @divFloor(bullet.rect.width, 2);
                         bullet.rect.y = self.player.rect.y;
                         bullet.active = true;
+                        self.active_bullets += 1;
                         break;
                     }
                 }
@@ -204,29 +196,37 @@ const Game = struct {
     }
 
     pub fn update(self: *@This()) void {
+        if (self.state != .running) return;
+
         self.player.update(self.conf.screen.width);
 
         for (&self.bullets) |*bullet| {
-            bullet.update(self.conf.screen.height);
-            if (!bullet.active) continue;
-            bullet_hit: {
+            if (self.active_bullets == 0) break;
+            bullet.update(self);
+            if (!bullet.active or bullet.rect.y < self.conf.invader.startY) continue;
+            bullet_skip: {
                 for (&self.invaders) |*col| {
                     for (col) |*invader| {
                         if (!invader.alive) continue;
                         if (bullet.rect.intersects(invader.rect)) {
                             bullet.active = false;
+                            self.active_bullets -= 1;
                             invader.alive = false;
+                            self.alive_invaders -= 1;
                             self.score += 10;
-                            break :bullet_hit;
+                            break :bullet_skip;
                         }
                     }
                 }
+                if (self.active_shields == 0 or bullet.rect.y < self.conf.shield.y) break :bullet_skip;
                 for (&self.shields) |*shield| {
                     if (shield.health == 0) continue;
                     if (!bullet.rect.intersects(shield.rect)) continue;
                     bullet.active = false;
+                    self.active_bullets -= 1;
                     shield.health -= 1;
-                    break :bullet_hit;
+                    if (shield.health == 0) self.active_shields -= 1;
+                    break :bullet_skip;
                 }
             }
         }
@@ -244,6 +244,7 @@ const Game = struct {
                             bullet.rect.x = invader.rect.x + @divFloor(invader.rect.width, 2) - @divFloor(bullet.rect.width, 2);
                             bullet.rect.y = invader.rect.y + invader.rect.height;
                             bullet.active = true;
+                            self.active_ebullets += 1;
                             break :invader_fired;
                         }
                     }
@@ -252,16 +253,19 @@ const Game = struct {
         }
 
         for (&self.enemy_bullets) |*bullet| {
-            bullet.update(self.conf.screen.height);
+            if (self.active_ebullets == 0) break;
+            bullet.update(self);
             if (!bullet.active) continue;
             if (bullet.rect.intersects(self.player.rect)) {
                 bullet.active = false;
+                self.active_ebullets -= 1;
                 self.state = State.gameover;
             }
             for (&self.shields) |*shield| {
                 if (shield.health == 0) continue;
                 if (!bullet.rect.intersects(shield.rect)) continue;
                 bullet.active = false;
+                self.active_ebullets -= 1;
                 shield.health -= 1;
                 break;
             }
@@ -271,31 +275,33 @@ const Game = struct {
         if (self.move_timer >= self.conf.invader.moveDelay) {
             var all_invaders_dead = true;
             self.move_timer = 0;
-
             var hit_edge = false;
             invader_move: for (&self.invaders) |*col| {
                 for (col) |*invader| {
                     if (!invader.alive) continue;
                     all_invaders_dead = false;
-                    if (invader.rect.intersects(self.player.rect)) {
+                    if (invader.rect.y + invader.rect.height >= self.conf.shield.y) {
                         self.state = State.gameover;
                         break :invader_move;
                     }
-                    const next_x = invader.rect.x + (self.conf.invader.speed * self.invader_direction);
+                    const dx = if (self.invader_move_right) invader.speed else -invader.speed;
+                    const next_x = invader.rect.x + dx;
                     if (next_x <= 0 or next_x + invader.rect.width >= self.conf.screen.width) {
                         hit_edge = true;
                         break :invader_move;
                     }
                 }
             }
-            var drop_distance: i32 = 0;
-            if (hit_edge) {
-                self.invader_direction *= -1;
-                drop_distance = self.conf.invader.dropDistance;
-            }
+            if (hit_edge) self.invader_move_right = !self.invader_move_right;
             for (&self.invaders) |*col| {
                 for (col) |*invader| {
-                    if (drop_distance > 0) invader.update(0, drop_distance) else invader.update(self.conf.invader.speed * self.invader_direction, 0);
+                    if (!invader.alive) continue;
+                    if (hit_edge) {
+                        invader.update(0, self.conf.invader.dropDistance);
+                    } else {
+                        const dx = if (self.invader_move_right) invader.speed else -invader.speed;
+                        invader.update(dx, 0);
+                    }
                 }
             }
             if (all_invaders_dead) self.state = State.won;
@@ -319,7 +325,7 @@ const Game = struct {
             },
             .running => {
                 for (&self.shields) |*shield| shield.draw();
-                self.player.rect.draw();
+                self.player.rect.draw(rl.Color.blue);
                 for (&self.invaders) |*col| {
                     for (col) |*invader| {
                         invader.draw();
@@ -328,6 +334,7 @@ const Game = struct {
                 for (&self.bullets) |*bullet| bullet.draw();
                 for (&self.enemy_bullets) |*bullet| bullet.draw();
                 rl.drawText(rl.textFormat("Score %d", .{self.score}), 20, 20, 20, rl.Color.green);
+                centerScreenText("A and D to move, SPACE to fire", self.conf.screen.width, 20, 0, rl.Color.white);
             },
         }
     }
@@ -346,6 +353,7 @@ pub fn createGame() Game {
         .rng = std.Random.DefaultPrng.init(@as(u64, std.crypto.random.int(u64))),
     };
     for (&game.shields, 0..) |*shield, i| {
+        game.active_shields += 1;
         shield.* = Shield.init(conf.shield.startX + @as(i32, @intCast(i)) * conf.shield.spacing, conf.shield.y, conf.shield.width, conf.shield.height);
     }
     for (&game.bullets) |*bullet| {
@@ -356,6 +364,7 @@ pub fn createGame() Game {
     }
     for (&game.invaders, 0..) |*col, i| {
         for (col, 0..) |*invader, j| {
+            game.alive_invaders += 1;
             const row = 5 - j; // flip order
             const x = conf.invader.startX + @as(i32, @intCast(i)) * conf.invader.spacingX;
             const y = conf.invader.startY + @as(i32, @intCast(row)) * conf.invader.spacingY;
@@ -369,7 +378,7 @@ pub fn resetGame(game: *Game) void {
     game.* = createGame();
 }
 
-pub fn centerScreenText(text: [:0]const u8, screenWidth: i32, size: i32, y: i32, color: rl.Color) void {
+pub fn centerScreenText(text: [:0]const u8, screenWidth: i32, size: u16, y: i32, color: rl.Color) void {
     rl.drawText(text, @divFloor(screenWidth, 2) - @divFloor(rl.measureText(text, size), 2), y, size, color);
 }
 
