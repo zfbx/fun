@@ -177,7 +177,7 @@ const Game = struct {
     shields: [4]Shield = undefined,
     bullets: [10]Bullet = undefined,
     enemy_bullets: [10]Bullet = undefined,
-    invaders: [5][11]Invader = undefined,
+    invaders: [11][5]Invader = undefined,
     rng: std.Random.DefaultPrng,
     player: Player,
 
@@ -210,8 +210,8 @@ const Game = struct {
             bullet.update(self.conf.screen.height);
             if (!bullet.active) continue;
             bullet_hit: {
-                for (&self.invaders) |*row| {
-                    for (row) |*invader| {
+                for (&self.invaders) |*col| {
+                    for (col) |*invader| {
                         if (!invader.alive) continue;
                         if (bullet.rect.intersects(invader.rect)) {
                             bullet.active = false;
@@ -235,9 +235,10 @@ const Game = struct {
         if (self.enemy_shoot_timer >= self.conf.invader.shootDelay) {
             self.enemy_shoot_timer = 0;
             invader_fired: {
-                for (&self.invaders) |*row| {
-                    for (row) |*invader| {
-                        if (!invader.alive or self.rng.random().intRangeAtMost(i32, 0, 100) > self.conf.invader.shootChance) continue;
+                for (&self.invaders) |*col| {
+                    if (self.rng.random().intRangeAtMost(i32, 0, 100) > self.conf.invader.shootChance) continue;
+                    for (col) |*invader| {
+                        if (!invader.alive) continue;
                         for (&self.enemy_bullets) |*bullet| {
                             if (bullet.active) continue;
                             bullet.rect.x = invader.rect.x + @divFloor(invader.rect.width, 2) - @divFloor(bullet.rect.width, 2);
@@ -272,8 +273,8 @@ const Game = struct {
             self.move_timer = 0;
 
             var hit_edge = false;
-            invader_move: for (&self.invaders) |*row| {
-                for (row) |*invader| {
+            invader_move: for (&self.invaders) |*col| {
+                for (col) |*invader| {
                     if (!invader.alive) continue;
                     all_invaders_dead = false;
                     if (invader.rect.intersects(self.player.rect)) {
@@ -292,8 +293,8 @@ const Game = struct {
                 self.invader_direction *= -1;
                 drop_distance = self.conf.invader.dropDistance;
             }
-            for (&self.invaders) |*row| {
-                for (row) |*invader| {
+            for (&self.invaders) |*col| {
+                for (col) |*invader| {
                     if (drop_distance > 0) invader.update(0, drop_distance) else invader.update(self.conf.invader.speed * self.invader_direction, 0);
                 }
             }
@@ -319,8 +320,8 @@ const Game = struct {
             .running => {
                 for (&self.shields) |*shield| shield.draw();
                 self.player.rect.draw();
-                for (&self.invaders) |*row| {
-                    for (row) |*invader| {
+                for (&self.invaders) |*col| {
+                    for (col) |*invader| {
                         invader.draw();
                     }
                 }
@@ -353,10 +354,11 @@ pub fn createGame() Game {
     for (&game.enemy_bullets) |*bullet| {
         bullet.* = Bullet.init(0, 0, conf.bullet.width, conf.bullet.height, 5, false);
     }
-    for (&game.invaders, 0..) |*row, i| {
-        for (row, 0..) |*invader, j| {
-            const x = conf.invader.startX + @as(i32, @intCast(j)) * conf.invader.spacingX;
-            const y = conf.invader.startY + @as(i32, @intCast(i)) * conf.invader.spacingY;
+    for (&game.invaders, 0..) |*col, i| {
+        for (col, 0..) |*invader, j| {
+            const row = 5 - j; // flip order
+            const x = conf.invader.startX + @as(i32, @intCast(i)) * conf.invader.spacingX;
+            const y = conf.invader.startY + @as(i32, @intCast(row)) * conf.invader.spacingY;
             invader.* = Invader.init(x, y, conf.invader.width, conf.invader.height);
         }
     }
