@@ -10,3 +10,5 @@ This project was built with the help of [this series](https://www.youtube.com/pl
 - Returning early where possible (see [Never nesting](https://www.youtube.com/watch?v=CFRhGnuXG-4))
 
 Check out his [YouTube](https://www.youtube.com/@CodeWithCypert) and subscribe :) He only has 7.8K subscribers as I write this.
+
+![Game Preview](preview.gif)
