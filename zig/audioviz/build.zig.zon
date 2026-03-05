@@ -1,0 +1,21 @@
+.{
+    .name = .audioviz,
+    .version = "0.0.1",
+    .fingerprint = 0xf7a263cbf6a64570,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .raylib_zig = .{
+            .url = "git+https://github.com/raylib-zig/raylib-zig?ref=devel#cd71c85d571027ac8033357f83b124ee051825b3",
+            .hash = "raylib_zig-5.6.0-dev-KE8REENOBQC-m5nK7M2b5aKSIubJPbPLUYcRhT7aT3RN",
+        },
+        .zaudio = .{
+            .url = "git+https://github.com/zig-gamedev/zaudio?ref=main#bb93ad665b89e302d4515a36b44cb8e73eaf6766",
+            .hash = "zaudio-0.11.0-dev-_M-91kHvPwAlW8MCRI4XiTbTeihqB8Zspgiuw-6Gqgdz",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

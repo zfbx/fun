@@ -1,0 +1,2 @@
+# AudioviZ
+This is my second zig project built on version `0.15.2` utilizing [raylib-zig](https://github.com/raylib-zig/raylib-zig) and [zaudio](https://github.com/zig-gamedev/zaudio) to make a **audio** **vi**suali**z**er with bars.
