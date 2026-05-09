@@ -7,7 +7,7 @@ I built this as a useful tool at work to sum up the total runtime of a collectio
 - It will scan through all the directories and group together titles with their total seconds and minutes
 
 ## Preview
-![ABC](image-name.png)
+![ABC](Example.png)
 
 ## License
 GPLv3
